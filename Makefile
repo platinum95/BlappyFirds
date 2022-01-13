@@ -1,4 +1,4 @@
-CC	= lcc -Wa-l -Wl-m -Wl-j
+CC	= lcc -Wa-l -Wl-m -Wl-j -debug
 
 all:	blappy_firds.gb
 
