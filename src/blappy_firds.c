@@ -1,12 +1,25 @@
 #include <gb/gb.h>
 #include <gb/cgb.h>
+#include <gbdk/console.h>
 #include <string.h>
 #include <rand.h>
 #include <stdbool.h>
 #include <stdio.h>
 
+#include <gbdk/platform.h>
+
+#include <gbdk/font.h>
+
 #include "tile_data.h"
-#include "pipes_map.h"
+//#include "pipes_map.h"
+
+// TODO:
+// - Scoring
+// - Splash
+// - Starting Screen
+// - Game Over screen
+// - Adjust mechanics
+
 
 #define INTERPIPE_DISTANCE 16
 #define PIPE_ARRAY_LENGTH 2
@@ -38,14 +51,15 @@ typedef struct Vec2d {
 
 typedef struct BlappyState {
     Vec2d position;
-    Vec2d speed;
+    int8_t y_speed;
     Vec2d acceleration;
 } BlappyState;
 
 typedef enum GameState {
     SplashScreen,
-    StartingGame,
+    StartingScreen,
     InGame,
+    TextDialog,
     GameOver
 } GameState;
 
@@ -66,19 +80,19 @@ void UpdateBlappy( BlappyState *blappyState ) {
     static uint8_t gravityDiv = 0;
     if ( ++gravityDiv == 12 ) {
         gravityDiv = 0;
-        blappyState->speed.y += blappyState->acceleration.y;
+        blappyState->y_speed += blappyState->acceleration.y;
         // TODO - consider an alternative fix for the hang at arc maxima
-        if ( blappyState->speed.y == 0 ) {
-            blappyState->speed.y = 1;
+        if ( blappyState->y_speed == 0 ) {
+            blappyState->y_speed = 1;
         }
     }
-    blappyState->speed.x += blappyState->acceleration.x;
-    blappyState->position.x += blappyState->speed.x;
-    blappyState->position.y += blappyState->speed.y;
+    //blappyState->speed.x += blappyState->acceleration.x;
+    //blappyState->position.x += blappyState->speed.x;
+    blappyState->position.y += blappyState->y_speed;
 
     if ( blappyState->position.y <= 14 ) {
         blappyState->position.y = 14;
-        blappyState->speed.y = 0;
+        blappyState->y_speed = 0;
     }
 
 }
@@ -106,21 +120,13 @@ void InitBlappy() {
 }
 
 
-void InitPipes() {
+void LoadPipes() {
     uint16_t backgroundPalette[] = { 
         TileDataCGBPal0c0, TileDataCGBPal0c1, TileDataCGBPal0c2, TileDataCGBPal0c3
     };
 
     set_bkg_palette( 0, 1, backgroundPalette );
     set_bkg_data( 0, 13, TileData );
-
-    VBK_REG = 1;
-    VBK_REG = 0;
-    //set_bkg_tiles( 0, 0, 10, 10, PipesTilemap );
-
-
-    VBK_REG = 1;
-    //set_bkg_tiles( 0, 0, 10, 10, palette_map );
 
     VBK_REG = 0;
 }
@@ -183,12 +189,14 @@ bool CheckCollision( GameContext *context ) {
     PipeObstacle *primaryPipe = &context->pipeList[ context->primaryPipeIndex ];
     uint8_t pipeXScreenSpace = primaryPipe->position << 3;
 
-    if ( ( blappyXScreenSpace + 16 > pipeXScreenSpace && blappyXScreenSpace + 16 < pipeXScreenSpace + 32 )
-        || ( blappyXScreenSpace > pipeXScreenSpace && blappyXScreenSpace < pipeXScreenSpace + 32 ) ) {
+//    if ( ( blappyXScreenSpace + 16 > pipeXScreenSpace && blappyXScreenSpace + 16 < pipeXScreenSpace + 32 )
+//        || ( blappyXScreenSpace > pipeXScreenSpace && blappyXScreenSpace < pipeXScreenSpace + 32 ) ) {
+
+    if ( blappyXScreenSpace + 16 > pipeXScreenSpace && blappyXScreenSpace + 16 < pipeXScreenSpace + 32 + 16 ) {
         // In x-range
         uint8_t offsetScreenSpaceMin = ( primaryPipe->verticalOffset + 2 ) << 3;
         uint8_t offsetScreenSpaceMax = offsetScreenSpaceMin + ( primaryPipe->gapSize << 3 );
-        if ( blappyYScreenSpace < offsetScreenSpaceMin || blappyYScreenSpace + BLAPPY_PIXEL_HEIGHT > offsetScreenSpaceMax ) {
+        if ( blappyYScreenSpace < offsetScreenSpaceMin || blappyYScreenSpace + 11 > offsetScreenSpaceMax ) {
             // Collision
             return true;
         }
@@ -201,7 +209,7 @@ bool CheckCollision( GameContext *context ) {
 void GeneratePipe( PipeObstacle* pipe, uint8_t pos ) {
     // Gap size must be smaller than (SCREENTILEHEIGHT - 2 - 2) = 13
     // Also must have some min.
-    pipe->gapSize = 5;
+    pipe->gapSize = 7;
 
     // Offset must be smaller than (SCREENTILEHEIGHT - 1 - gap - 2) 
     const uint8_t maxOffset = SCREENTILEHEIGHT - 3 - pipe->gapSize;
@@ -210,7 +218,6 @@ void GeneratePipe( PipeObstacle* pipe, uint8_t pos ) {
     while ( pipe->verticalOffset > maxOffset ) {
         pipe->verticalOffset -= maxOffset;
     }
-    pipe->verticalOffset = 0;
     pipe->position = pos;
 }
 
@@ -237,9 +244,37 @@ void ScrollWorld( GameContext *context ) {
     move_bkg( context->scrollPosition, 0 );
 }
 
+typedef struct TextDialogContext {
+    const char** dialogs;
+    uint8_t num_dialogs;
+    uint8_t current_dialogs;
+} TextDialogContext;
+
+TextDialogContext BeginTextDialog( GameState *state, const char** dialogs, uint8_t num_dialogs ) {
+    state = TextDialog;
+    TextDialogContext context;
+    context.dialogs = dialogs;
+    context.num_dialogs = num_dialogs;
+    context.current_dialogs = 0;
+    return context;
+}
+
+bool UpdateTextDialogState( TextDialogContext* context ) {
+    if ( joypad() & J_A ) {
+        ++context->current_dialogs;
+        if ( context->current_dialogs == context->num_dialogs ) {
+            return true;
+        }
+        else {
+            
+        }
+    }
+}
+
 void GameLoop() {
     GameState gameState = SplashScreen;
     uint8_t frameUpdateCounter = 0;
+    uint16_t counter = 0;
 
     GameContext context = {
         .primaryPipeIndex = 0,
@@ -251,40 +286,63 @@ void GameLoop() {
         wait_vbl_done();
         switch ( gameState ) {
             case SplashScreen: {
-                gameState = StartingGame;
-                break;
-            }
-            case StartingGame: {
-                // Initialise pipes
-                context.primaryPipeIndex = 0;
-
-                for ( uint8_t i = 0; i < PIPE_ARRAY_LENGTH; ++i ) {
-                    PipeObstacle *cPipe = &context.pipeList[ i ];
-                    GeneratePipe( cPipe, ( INTERPIPE_DISTANCE * i ) );
-                    SetPipeTilemap( cPipe );
+                if ( ++counter == 1 ) {
+                    cls();
+                    for( uint8_t i = 0; i <  SCREENTILEHEIGHT / 2; ++i ) printf( "\n" );
+                    printf( "    Blappy Fird" );
                 }
 
-                move_bkg( 0, 0 );
-                context.blappyState.acceleration.x = 0;
-                context.blappyState.acceleration.y = 1;
-                context.blappyState.speed.x = 0;
-                context.blappyState.speed.y = 0;
-                context.blappyState.position.x = 70 + 8;
-                context.blappyState.position.y = 40 + 16;
+                if ( ++counter == 60 * 3 || joypad() & J_START ) {
 
-                gameState = InGame;
+                    gameState = StartingScreen;
+                    counter = 0;
+                }
                 break;
             }
+            case StartingScreen: {
+                if ( ++counter == 1 ) {
+                    cls();
+                    for( uint8_t i = 0; i <  SCREENTILEHEIGHT / 2; ++i ) printf( "\n" );
+                    printf ( "Press START to play" );
+                }
+                if ( joypad() & J_START ) {
+                    // Initialise pipes
+                    cls();
+                    LoadPipes();
+                    context.primaryPipeIndex = 0;
+
+                    for ( uint8_t i = 0; i < PIPE_ARRAY_LENGTH; ++i ) {
+                        PipeObstacle *cPipe = &context.pipeList[ i ];
+                        GeneratePipe( cPipe, ( INTERPIPE_DISTANCE * i ) );
+                        SetPipeTilemap( cPipe );
+                    }
+
+                    move_bkg( 0, 0 );
+                    context.blappyState.acceleration.x = 0;
+                    context.blappyState.acceleration.y = 1;
+                    //context.blappyState.speed.x = 0;
+                    context.blappyState.y_speed = 0;
+                    context.blappyState.position.x = 70 + 8;
+                    context.blappyState.position.y = 40 + 16;
+                    context.primaryPipeIndex = 0;
+                    context.scrollPosition = 0;
+
+                    SHOW_SPRITES;
+                    gameState = InGame;
+                }
+                break;
+            }
+
             case InGame: {
                 static bool aState = false;
-                if ( ++frameUpdateCounter == 5 ) {
+                if ( ++frameUpdateCounter == 1 ) {
                     frameUpdateCounter = 0;
 
                     uint8_t inputState = joypad();
                     bool aPressed = inputState & J_A;
                     if ( aState != aPressed ) {
                         if ( aPressed ) {
-                            context.blappyState.speed.y = -2;
+                            context.blappyState.y_speed = -2;
                         }
                         aState = aPressed;
                     }
@@ -296,9 +354,9 @@ void GameLoop() {
 
                     if ( CheckCollision( &context ) ) {
                         gameState = GameOver;
-                        context.blappyState.position.y = SCREENHEIGHT - BLAPPY_PIXEL_HEIGHT + 16;
-                        context.blappyState.speed.y = 0;
-                        printf( "Game Over" );
+                        context.blappyState.position.y = (uint8_t)( SCREENHEIGHT - BLAPPY_PIXEL_HEIGHT + 16 );
+                        context.blappyState.y_speed = 0;
+                        counter = 0;
                         break;
                     }
                     MoveBlappy( context.blappyState.position.x, context.blappyState.position.y );
@@ -308,8 +366,16 @@ void GameLoop() {
                 break;
             }
             case GameOver: {
+                if ( ++counter == 1 ) {
+                    cls();
+                    move_bkg( 0, 0 );
+                    HIDE_SPRITES;
+                    for( uint8_t i = 0; i <  SCREENTILEHEIGHT / 2; ++i ) printf( "\n" );
+                    printf( "     Game Over" );
+                }
                 if ( joypad() & J_START ) {
-                    gameState = SplashScreen;
+                    counter = 0;
+                    gameState = StartingScreen;
                 }
                 break;
             }
@@ -321,11 +387,41 @@ void GameLoop() {
     }
 }
 
+struct font {
+    uint8_t font_tile_start;
+    uint16_t font_table;
+};
+
+int func( struct font* _dont ) {
+
+}
+
 int main() {
-    uint16_t seed = LY_REG;
-    seed |= (uint16_t)DIV_REG << 8;
-    initrand( seed );
-    InitPipes();
+    uint8_t start_tile = 0x24;
+    struct font test_font;
+    test_font.font_tile_start = start_tile;
+    test_font.font_table = (uint16_t) font_ibm;
+
+    font_init();
+    //font_t ibm_font = font_load(font_ibm);  /* 96 tiles */
+//
+    //struct font *a = (struct font*) ibm_font;
+    //func( a );
+//
+    font_set( (uint16_t) &test_font );
+    //font_set(ibm_font);
+    set_bkg_1bpp_data( 0x0030, 96, font_ibm + 130);
+    printf( "Font demo.\n\n" );
+    //printf( "Font demo.\n\n" );
+    //printf( "Font demo.\n\n" );
+    //printf( "Font demo.\n\n" );
+    //printf( "Font demo.\n\n" );
+   // while(1);
+    //uint16_t seed = LY_REG;
+    //seed |= (uint16_t)DIV_REG << 8;
+    //initrand( seed );
+
+    //LoadPipes();
 
     SPRITES_8x8;
     InitBlappy();
@@ -333,8 +429,17 @@ int main() {
     SHOW_SPRITES;
     SHOW_BKG;
     DISPLAY_ON;
+    uint16_t backgroundPalette[] = { 
+        TileDataCGBPal0c0, TileDataCGBPal0c1, TileDataCGBPal0c2, TileDataCGBPal0c3
+    };
+    set_bkg_palette( 0, 1, backgroundPalette );
+    //VBK_REG = 0;
 
-    GameLoop();
+    //wait_vbl_done();
+    //cls();
+    //printf( "Font Demo" );
+    while(1);
+    //GameLoop();
 
     return 0;
 }
